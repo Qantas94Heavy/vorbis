@@ -378,16 +378,59 @@ void _vp_psy_clear(vorbis_look_psy *p){
       }
       _ogg_free(p->noiseoffset);
     }
+    if(p->ntfix_noiseoffset){
+      _ogg_free(p->ntfix_noiseoffset);
+    }
     memset(p,0,sizeof(*p));
   }
 }
 
+/*
+  aoTuV M2
+  Check extreme noise (post-echo) strength.
+  This code is a temporary thing, but is effective in critical post-echo.
+    Only Trans. blocks. (nn>=2048)
+    ret: 'minus sign' does disable of postprocessing.
+  by Aoyumi @ 2010/09/12
+*/
+float _postnoise_detection(float *pcm, int nn, int mode, int lw_mode){
+  int i;
+  int sn=nn >> 2;
+  int mn=sn+sn;
+  int en=sn+(nn >> 1);
+  float ret=-1.0;
+  double upt=0, unt=0;
+
+  if(mode!=2)return ret; // only trans. block
+  if(lw_mode!=0)return ret;
+  if(nn<2048)return ret;
+
+  for(i=sn; i<mn; i++){
+    upt+=fabs(*(pcm+i));
+  }
+  for(i=mn; i<en; i++){
+    unt+=fabs(*(pcm+i));
+  }
+  if(unt/sn > 0.01)return ret;
+
+  upt*=upt;
+  unt*=unt;
+  unt*=15;
+
+  if(upt>unt){
+    ret=upt-unt;
+    if(ret<0.1)ret=-1.0;
+  }
+  return ret;
+}
+
+
 /* octave/(8*eighth_octave_lines) x scale and dB y scale */
 static void seed_curve(float *seed,
                        const float **curves,
-                       float amp,
-                       int oc, int n,
-                       int linesper,float dBoffset){
+                       const float amp,
+                       const int oc, const int n,
+                       const int linesper, const float dBoffset){
   int i,post1;
   int seedptr;
   const float *posts,*curve;
@@ -410,12 +453,12 @@ static void seed_curve(float *seed,
   }
 }
 
-static void seed_loop(vorbis_look_psy *p,
+static void seed_loop(const vorbis_look_psy *p,
                       const float ***curves,
                       const float *f,
                       const float *flr,
                       float *seed,
-                      float specmax){
+                      const float specmax){
   vorbis_info_psy *vi=p->vi;
   long n=p->n,i;
   float dBoffset=vi->max_curve_dB-specmax;
@@ -447,7 +490,7 @@ static void seed_loop(vorbis_look_psy *p,
   }
 }
 
-static void seed_chase(float *seeds, int linesper, long n){
+static void seed_chase(float *seeds, const int linesper, const long n){
   long  *posstack=alloca(n*sizeof(*posstack));
   float *ampstack=alloca(n*sizeof(*ampstack));
   long   stack=0;
@@ -505,7 +548,7 @@ static void seed_chase(float *seeds, int linesper, long n){
 
 /* bleaugh, this is more complicated than it needs to be */
 #include<stdio.h>
-static void max_seeds(vorbis_look_psy *p,
+static void max_seeds(const vorbis_look_psy *p,
                       float *seed,
                       float *flr){
   long   n=p->total_octave_lines;
@@ -734,20 +777,95 @@ void _vp_noisemask(vorbis_look_psy *p,
   }
 #endif
 
-  for(i=0;i<n;i++){
+  ntfix(p, logmdct, work, block_mode);
+  
+  /* noise compand & aoTuV M5 extension & pre sotre tone peak. */
+  i=0;
+  if(noise_compand_level > 0){
+    int thter = p->n33p;
+    for(;i<thter;i++){
+      int dB=logmask[i]+.5;
+      if(dB>=NOISE_COMPAND_LEVELS)dB=NOISE_COMPAND_LEVELS-1;
+      if(dB<0)dB=0;
+      epeak[i]= work[i]+stn_compand[dB];
+      logmask[i]= work[i]+p->vi->noisecompand[dB]-
+       ((p->vi->noisecompand[dB]-p->vi->noisecompand_high[dB])*noise_compand_level);
+    }
+  }
+  for(;i<n;i++){
     int dB=logmask[i]+.5;
     if(dB>=NOISE_COMPAND_LEVELS)dB=NOISE_COMPAND_LEVELS-1;
     if(dB<0)dB=0;
+    epeak[i]= work[i]+stn_compand[dB];
     logmask[i]= work[i]+p->vi->noisecompand[dB];
   }
 
+  /* initialization of npeak(nepeak) */
+  for(i=0,k=0; i<n; i+=partition, k++)npeak[k]=0.f;
+  
+  /* reduction of post-echo. (postprocessing of aoTuV M2) */
+  if(poste>0){
+    for(i=0,k=0; i<p->min_nn_lp; i+=partition,k++){
+      float temp=min(min(poste,30.f), p->noiseoffset[1][i]+30.f); // limit
+      if(temp<=0)continue;
+      npeak[k]=-1.f; // this time, don't use noise normalization
+      for(j=0; j<partition; j++) logmask[i+j]-=temp;
+    }
+  }
+
+  /* AoTuV */
+  /** @ M8 MAIN **
+    store non peak logmask(floor) for noise normalization.
+    npeak (each partition) = min [0 ~ 1.0f] max
+    by Aoyumi @ 2010/09/28
+  */
+  for(k=0, i=0; i<p->min_nn_lp; i+=partition,k++){
+    const float nt=4;
+    float o=p->noiseoffset[1][i+partition-1]+6;  // threshold of offset
+    float me=0;  // max energy (per partition)
+    float avge=0; // average energy (per partition)
+
+    if(o<=0)continue;
+    if(npeak[k]<-0.5)continue;
+
+    for(j=0; j<partition; j++){
+      float temp=logmdct[i+j]-logmask[i+j];
+      if(me<temp)me=temp;
+      avge+=logmdct[i+j];
+    }
+    if(avge < (-95*partition))continue; // limit (MDCT AVG. /dB)
+
+    if(me<nt){
+      npeak[k]=(min(o, nt-me))/nt;
+    }
+  }
+
+  /* AoTuV */
+  /** @ M9 MAIN **
+    store peak impuse for coupling stereo. (to epeak)
+    by Aoyumi @ 2010/05/05
+  */
+  {
+    i=0;
+    if(block_mode>1){ // long and trans. block
+      for(; i<p->tonecomp_endp; i++){
+        float temp=logmdct[i]-epeak[i];
+        epeak[i]=0.f;
+        if(temp>=12.f){
+          float mi=logmdct[i]-lastmdct[i];
+          if(mi>=1)epeak[i]=mi;
+        }
+      }
+    }
+    memset(epeak+i,0,sizeof(epeak[0])*(n-i));
+  }
 }
 
-void _vp_tonemask(vorbis_look_psy *p,
-                  float *logfft,
+void _vp_tonemask(const vorbis_look_psy *p,
+                  const float *logfft,
                   float *logmask,
-                  float global_specmax,
-                  float local_specmax){
+                  const float global_specmax,
+                  const float local_specmax){
 
   int i,n=p->n;
 
@@ -768,65 +886,367 @@ void _vp_tonemask(vorbis_look_psy *p,
 
 }
 
-void _vp_offset_and_mix(vorbis_look_psy *p,
-                        float *noise,
-                        float *tone,
-                        int offset_select,
+/*
+   @ M3 PRE
+     set parameters for aoTuV M3
+*/
+static void set_m3p(local_mod3_psy *mp, const int lW_no, const int impadnum,
+             const int n, const int hs_rate, const float toneatt, 
+             const float *logmdct, const float *lastmdct, float *tempmdct,
+             const int block_mode, const int lW_block_mode,
+             const int bit_managed, const int offset_select){
+
+  int i,j, count;
+  float freqbuf, cell;
+
+  /* lower sampling rate */
+  if(!hs_rate){
+    mp->sw = 0;
+    mp->mdctbuf_flag=0;
+    return;
+  }
+
+  /* set flag for lastmdct and tempmdct */
+  if(!bit_managed || offset_select==2){
+    mp->mdctbuf_flag=1;
+  }else{
+    mp->mdctbuf_flag=0;
+    if(offset_select==0){ // high noise scene
+      mp->sw = 0;
+      return;
+    }
+  }
+
+  /* non impulse */
+  if(block_mode){
+    mp->sw = 0;
+    return;
+  }
+
+  /** M3 PRE **/
+  switch(n){
+
+    case 128:
+      if(toneatt < 3) count = 2; // q6~
+      else count = 3;
+
+      if(!lW_block_mode){ /* last window "short" - type "impulse" */
+        if(lW_no < 8){
+          /* impulse - @impulse case1 */
+          mp->noise_rate = 0.7-(float)(lW_no-1)/17;
+          mp->noise_center = (float)(lW_no*count);
+          mp->tone_rate = 8-lW_no;
+        }else{
+          /* impulse - @impulse case2 */
+          mp->noise_rate = 0.3;
+          mp->noise_center = 25;
+          mp->tone_rate = 0;
+          if((lW_no*count) < 24) mp->noise_center = lW_no*count;
+        }
+          if(mp->mdctbuf_flag == 1){
+            for(i=0; i<n; i++) tempmdct[i] -= 5;
+          }
+      }else{ /* non_impulse - @Short(impulse) case */
+          mp->noise_rate = 0.7;
+          mp->noise_center = 0;
+          mp->tone_rate = 8.;
+          if(mp->mdctbuf_flag == 1){
+            for(i=0; i<n; i++) tempmdct[i] = lastmdct[i] - 5;
+          }
+      }
+      mp->noise_rate_low = 0;
+      mp->sw = 1;
+      if(impadnum) mp->noise_rate*=(impadnum*0.125);
+      for(i=0;i<n;i++){
+          cell=75/(float)freq_bfn128[i];
+          for(j=1; j<freq_bfn128[i]; j++){
+            freqbuf = logmdct[i]-(cell*j);
+            if((tempmdct[i+j] < freqbuf) && (mp->mdctbuf_flag == 1))
+             tempmdct[i+j] += (5./(float)freq_bfn128[i+j]);
+          }
+      }
+      break;
+
+    case 256:
+      // for q-1/-2 44.1kHz/48kHz
+      if(!lW_block_mode){ /* last window "short" - type "impulse" */
+          count = 6;
+          if(lW_no < 4){
+            /* impulse - @impulse case1 */
+            mp->noise_rate = 0.4-(float)(lW_no-1)/11;
+            mp->noise_center = (float)(lW_no*count+12);
+            mp->tone_rate = 8-lW_no*2;
+          }else{
+            /* impulse - @impulse case2 */
+            mp->noise_rate = 0.2;
+            mp->noise_center = 30;
+            mp->tone_rate = 0;
+          }
+          if(mp->mdctbuf_flag == 1){
+            for(i=0; i<n; i++) tempmdct[i] -= 10;
+          }
+      }else{ /* non_impulse - @Short(impulse) case */
+          mp->noise_rate = 0.6;
+          mp->noise_center = 12;
+          mp->tone_rate = 8.;
+          if(mp->mdctbuf_flag == 1){
+            for(i=0; i<n; i++) tempmdct[i] = lastmdct[i] - 10;
+          }
+      }
+      mp->noise_rate_low = 0;
+      mp->sw = 1;
+      if(impadnum) mp->noise_rate*=(impadnum*0.0625);
+      for(i=0;i<n;i++){
+          cell=75/(float)freq_bfn256[i];
+          for(j=1; j<freq_bfn256[i]; j++){
+            freqbuf = logmdct[i]-(cell*j);
+            if((tempmdct[i+j] < freqbuf) && (mp->mdctbuf_flag == 1))
+             tempmdct[i+j] += (10./(float)freq_bfn256[i+j]);
+          }
+      }
+      break;
+
+    default:
+      mp->sw = 0;
+      break;
+  }
+
+  /* higher noise curve (lower rate) && managed mode */ 
+  if(bit_managed && (offset_select==0) && mp->sw) mp->noise_rate*=0.2;
+
+}
+
+void _vp_offset_and_mix(const vorbis_look_psy *p,
+                        const float *noise,
+                        const float *tone,
+                        const int offset_select,
+                        const int bit_managed,
                         float *logmask,
                         float *mdct,
-                        float *logmdct){
-  int i,n=p->n;
-  float de, coeffi, cx;/* AoTuV */
+                        float *logmdct,
+                        float *lastmdct, float *tempmdct,
+                        float low_compand,
+                        float *npeak,
+                        const int end_block,
+                        const int block_mode,
+                        const int nW_modenumber,
+                        const int lW_block_mode,
+                        const int lW_no, const int impadnum){
+
+  int i,j,k,n=p->n;
+  int hsrate=((p->rate<26000) ? 0 : 1); // high sampling rate is 1
+  int partition=(p->vi->normal_p ? p->vi->normal_partition : 16);
+  float m1_de, m1_coeffi; /* aoTuV for M1 */
   float toneatt=p->vi->tone_masteratt[offset_select];
 
-  cx = p->m_val;
+  local_mod3_psy mp3;
+  local_mod4_psy mp4;
+
+  /* Init for aoTuV M3 */
+  memset(&mp3,0,sizeof(mp3));
+
+  /* Init for aoTuV M4 */
+  mp4.start=p->vi->normal_start;
+  mp4.end = p->tonecomp_endp;
+  mp4.thres = p->tonecomp_thres;
+  mp4.lp_pos=9999;
+  mp4.end_block=end_block;
+
+  /* Collapse of low(mid) frequency is prevented. (for 32/44/48kHz q-2) */
+  if(low_compand<0 || toneatt<25.)low_compand=0;
+  else low_compand*=(toneatt-25.);
+
+  /** @ M3 PRE **/
+  set_m3p(&mp3, lW_no, impadnum, n, hsrate, toneatt, logmdct, lastmdct, tempmdct,
+          block_mode, lW_block_mode,
+          bit_managed, offset_select);
+
+  /** @ M4 PRE **/
+  mp4.end_block+=p->vi->normal_partition;
+  if(mp4.end_block>n)mp4.end_block=n;
+  if(!hsrate){
+    mp4.end=mp4.end_block; /* for M4 */
+  }else{
+    if(p->vi->normal_thresh>1.){
+      mp4.start = 9999;
+    }else{
+      if(mp4.end>mp4.end_block)mp4.lp_pos=mp4.end;
+      else mp4.lp_pos=mp4.end_block;
+    }
+  }
 
   for(i=0;i<n;i++){
     float val= noise[i]+p->noiseoffset[offset_select][i];
+    float tval= tone[i]+toneatt;
+    if(i<=mp4.start)tval-=low_compand;
     if(val>p->vi->noisemaxsupp)val=p->vi->noisemaxsupp;
-    logmask[i]=max(val,tone[i]+toneatt);
 
+    /* AoTuV */
+    /** @ M3 MAIN **
+    Dynamic impulse block noise control. (#7)
+    48/44.1/32kHz only.
+    by Aoyumi @ 2008/12/01 - 2011/02/27(fixed)
+    */
+    if(mp3.sw){
+      if(val>tval){
+        if( (val>lastmdct[i]) && (logmdct[i]>(tempmdct[i]+mp3.noise_center)) ){
+          int toneac=0;
+          float valmask=0;
+          float rate_mod;
+          float mainth;
+
+          if(mp3.mdctbuf_flag == 1)tempmdct[i] = logmdct[i]; // overwrite
+          if(logmdct[i]>lastmdct[i]){
+            rate_mod = mp3.noise_rate;
+          }else{
+            rate_mod = mp3.noise_rate_low;
+          }
+          // edit tone masking
+          if( !impadnum && (i < p->tonecomp_endp) && ((val-lastmdct[i])>20.f) ){
+            float dBsub=(logmdct[i]-lastmdct[i]);
+            if(dBsub>25.f){
+              toneac=1;
+              if(tval>-100.f && ((logmdct[i]-tval)<48.f)){ // limit
+                float tr_cur=mp3.tone_rate;
+                if(dBsub<35.f) tr_cur*=((35.f-dBsub)*.1f);
+                //if(dBsub<35.f) tr_cur*=((dBsub-25.f)*.1f);
+                tval-=tr_cur;
+                if(tval<-100.f)tval=-100.f; // lower limit = -100
+                if((logmdct[i]-tval)>48.f)tval=logmdct[i]-48.f; // limit
+              }
+            }
+          }
+          // main work
+          if(i > p->m3n[0]){
+            mainth=30.f;
+          }else if(i > p->m3n[1]){
+            mainth=20.f;
+          }else if(i > p->m3n[2]){
+            mainth=10.f; rate_mod*=.5f;
+          }else{
+            mainth=10.f; rate_mod*=.3f;
+          }
+          if((val-tval)>mainth) valmask=((val-tval-mainth)*.1f+mainth)*rate_mod;
+          else valmask=(val-tval)*rate_mod;
+
+          if((val-valmask)>lastmdct[i])val-=valmask;
+          else val=lastmdct[i];
+
+          if(toneac){
+            float temp=val-max(lastmdct[i], -140); // limit
+            if(temp>20.f) val-=(temp-20.f)*.2f;
+          }
+
+          // exception of npeak(nepeak) for M8
+          if(toneac==1)npeak[i/partition]=-1.f;
+          else if(npeak[i/partition]>0)npeak[i/partition]=0;
+        }
+      }
+    }
+
+    /* AoTuV */
+    /** @ M4 MAIN **
+    The purpose of this portion is working noise normalization more correctly. 
+    (There is this in order to prevent extreme boost of floor)
+      mp4.start = start point
+      mp4.end   = end point
+      mp4.thres = threshold
+    by Aoyumi @ 2006/03/20 - 2010/06/16(fixed)
+    */
+    //logmask[i]=max(val,tval);
+    if(val>tval){
+      logmask[i]=val;
+    }else if((i>mp4.start) && (i<mp4.end)){
+      if(logmdct[i]<tval){
+        if(logmdct[i]<val){
+          tval-=(tval-val)*mp4.thres;
+        }else{
+          tval=logmdct[i];
+        }
+      }
+      logmask[i]=tval;
+    }else logmask[i]=tval;
 
     /* AoTuV */
     /** @ M1 **
-        The following codes improve a noise problem.
-        A fundamental idea uses the value of masking and carries out
-        the relative compensation of the MDCT.
-        However, this code is not perfect and all noise problems cannot be solved.
-        by Aoyumi @ 2004/04/18
+    The following codes improve a noise problem.
+    A fundamental idea uses the value of masking and carries out
+    the relative compensation of the MDCT.
+    However, this code is not perfect and all noise problems cannot be solved.
+    by Aoyumi @ 2004/04/18
     */
 
     if(offset_select == 1) {
-      coeffi = -17.2;       /* coeffi is a -17.2dB threshold */
+      m1_coeffi = -17.2;       /* coeffi is a -17.2dB threshold */
       val = val - logmdct[i];  /* val == mdct line value relative to floor in dB */
-
-      if(val > coeffi){
+      
+      if(val > m1_coeffi){
         /* mdct value is > -17.2 dB below floor */
 
-        de = 1.0-((val-coeffi)*0.005*cx);
+        m1_de = 1.0-((val-m1_coeffi)*0.005*p->m_val);
         /* pro-rated attenuation:
            -0.00 dB boost if mdct value is -17.2dB (relative to floor)
            -0.77 dB boost if mdct value is 0dB (relative to floor)
            -1.64 dB boost if mdct value is +17.2dB (relative to floor)
            etc... */
 
-        if(de < 0) de = 0.0001;
+        if(m1_de < 0) m1_de = 0.0001;
       }else
         /* mdct value is <= -17.2 dB below floor */
 
-        de = 1.0-((val-coeffi)*0.0003*cx);
+        m1_de = 1.0-((val-m1_coeffi)*0.0003*p->m_val);
       /* pro-rated attenuation:
          +0.00 dB atten if mdct value is -17.2dB (relative to floor)
          +0.45 dB atten if mdct value is -34.4dB (relative to floor)
          etc... */
 
-      mdct[i] *= de;
+      mdct[i] *= m1_de;
+    }
+  }
+  
+  /** @ M3 SET lastmdct **/
+  if(mp3.mdctbuf_flag==1){
+    const int mag=8;
+    switch(block_mode){
+      case 0: case 1:  // short block (n==128 or 256 only)
+        if(nW_modenumber){ // next long (trans.) block
+          for(i=0,k=0; i<n; i++,k+=mag){
+            for(j=0; j<mag; j++){
+              lastmdct[k+j]=logmdct[i];
+            }
+          }
+        }else{
+          memcpy(lastmdct, logmdct, n*sizeof(*lastmdct)); // next short block
+        }
+        break;
+        
+      case 2:  // trans. block
+        if(!nW_modenumber){ // next short block
+          int nsh = n >> 3; // 1/8
+          for(i=0; i<nsh; i++){
+            int ni=i*mag;
+            lastmdct[i] = logmdct[ni];
+            for(j=1; j<mag; j++){
+              if(lastmdct[i] > logmdct[ni+j]){
+                lastmdct[i] = logmdct[ni+j];
+              }
+            }
+          }
+        }else{
+          memcpy(lastmdct, logmdct, n*sizeof(*lastmdct)); // next long block
+        }
+        break;
+        
+      case 3:  // long block (n==1024 or 2048)
+        memcpy(lastmdct, logmdct, n*sizeof(*lastmdct));
+        break;
 
+      default: break;
     }
   }
 }
 
-float _vp_ampmax_decay(float amp,vorbis_dsp_state *vd){
+float _vp_ampmax_decay(float amp, const vorbis_dsp_state *vd){
   vorbis_info *vi=vd->vi;
   codec_setup_info *ci=vi->codec_setup;
   vorbis_info_psy_global *gi=&ci->psy_g_param;

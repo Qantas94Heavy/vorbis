@@ -10,7 +10,7 @@
  *                                                                  *
  ********************************************************************
 
- function: toplevel residue templates for 32/44.1/48kHz uncoupled
+ function: toplevel residue templates for 32/44.1/48kHz (5.1ch)
 
  ********************************************************************/
 

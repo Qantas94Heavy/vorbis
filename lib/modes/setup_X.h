@@ -14,15 +14,17 @@
 
  ********************************************************************/
 
-static const double rate_mapping_X[12]={
-  -1.,-1.,-1.,-1.,-1.,-1.,
+static const double rate_mapping_X[13]={
+  -1.,-1.,-1.,-1.,-1.,-1.,-1.
   -1.,-1.,-1.,-1.,-1.,-1.
 };
 
 static const ve_setup_data_template ve_setup_X_stereo={
-  11,
+//  11,
+  12,
   rate_mapping_X,
   quality_mapping_44,
+  preamp_48,
   2,
   50000,
   200000,

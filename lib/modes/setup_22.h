@@ -76,9 +76,11 @@ static const ve_setup_data_template ve_setup_22_stereo={
 };
 
 static const ve_setup_data_template ve_setup_22_uncoupled={
-  3,
+//  3,
+  4,
   rate_mapping_22_uncoupled,
   quality_mapping_16,
+  preamp_22,
   -1,
   19000,
   26000,

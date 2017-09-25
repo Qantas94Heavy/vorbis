@@ -91,9 +91,11 @@ static const ve_setup_data_template ve_setup_11_stereo={
 };
 
 static const ve_setup_data_template ve_setup_11_uncoupled={
-  2,
+//  2,
+  3,
   rate_mapping_11_uncoupled,
   quality_mapping_11,
+  preamp_11,
   -1,
   9000,
   15000,

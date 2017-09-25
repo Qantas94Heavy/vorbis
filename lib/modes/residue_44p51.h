@@ -436,6 +436,7 @@ static const vorbis_residue_template _res_44p51_9[]={
 };
 
 static const vorbis_mapping_template _mapres_template_44_51[]={
+  { _map_nominal_51, _res_44p51_n1 }, /* -2 */
   { _map_nominal_51, _res_44p51_n1 }, /* -1 */
   { _map_nominal_51, _res_44p51_0 }, /* 0 */
   { _map_nominal_51, _res_44p51_1 }, /* 1 */

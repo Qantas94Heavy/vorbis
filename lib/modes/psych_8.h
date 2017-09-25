@@ -44,11 +44,30 @@ static const noise3 _psy_noisebias_8[3]={
     {-30,-30,-30,-30,-26,-26,-26,-26,-26,-26,-26,-26,-26,-24, 99, 99, 99}}},
 };
 
+static const noiseguard _psy_noiseguards_8[3]={
+  {10,10,-1},
+  {10,10,-1},
+  {10,10,-1},
+};
+
+
+/* ath ****************/
+static const int _psy_ath_floater_8[4]={
+  -100,-100,-100,-105,
+};
+static const int _psy_ath_abs_8[4]={
+  -130,-130,-130,-140,
+};
+
 /* stereo mode by base quality level */
-static const adj_stereo _psy_stereo_modes_8[3]={
+static const adj_stereo _psy_stereo_modes_8[4]={
   /*  0   1   2   3   4   5   6   7   8   9  10  11  12  13  14  */
   {{  4,  4,  4,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3},
-   {  6,  5,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4},
+   {  7,  7,  7,  7,  7,  7,  7,  7,  6,  6,  5,  5,  5,  4,  4},
+   {  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1},
+   { 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99}},
+  {{  4,  4,  4,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3},
+   {  6,  6,  6,  5,  5,  5,  5,  5,  4,  4,  4,  4,  4,  4,  4},
    {  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1},
    { 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99}},
   {{  4,  4,  4,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3},
@@ -61,40 +80,21 @@ static const adj_stereo _psy_stereo_modes_8[3]={
    { 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99}},
 };
 
-static const noiseguard _psy_noiseguards_8[2]={
-  {10,10,-1},
-  {10,10,-1},
+/* tone master attenuation by base quality mode and bitrate tweak */
+static const att3 _psy_tone_masteratt_8[4]={
+  {{ 33,  25,  13},  0,   0},  /* -2 */
+  {{ 32,  25,  12},  0,   0},  /* -1 */
+  {{ 30,  25,  12},  0,   0},  /*  0 */
+  {{ 20,   0, -14},  0,   0},  /* 10 */
 };
 
-static const compandblock _psy_compand_8[2]={
-  {{
-     0, 1, 2, 3, 4, 5, 6,  7,     /* 7dB */
-     8, 8, 9, 9,10,10,11, 11,     /* 15dB */
-    12,12,13,13,14,14,15, 15,     /* 23dB */
-    16,16,17,17,17,18,18, 19,     /* 31dB */
-    19,19,20,21,22,23,24, 25,     /* 39dB */
-  }},
-  {{
-     0, 1, 2, 3, 4, 5, 6,  6,     /* 7dB */
-     7, 7, 6, 6, 5, 5, 4,  4,     /* 15dB */
-     3, 3, 3, 4, 5, 6, 7,  8,     /* 23dB */
-     9,10,11,12,13,14,15, 16,     /* 31dB */
-    17,18,19,20,21,22,23, 24,     /* 39dB */
-  }},
-};
+/* lowpass by mode **************/
+static const double _psy_lowpass_8[4]={2.6,3.,4.,4.};
 
-static const double _psy_lowpass_8[3]={3.,4.,4.};
-static const int _noise_start_8[2]={
-  64,64,
+/* noise normalization **********/
+static const int _noise_start_8[3]={
+  64,64,64,
 };
-static const int _noise_part_8[2]={
-  8,8,
-};
-
-static const int _psy_ath_floater_8[3]={
-  -100,-100,-105,
-};
-
-static const int _psy_ath_abs_8[3]={
-  -130,-130,-140,
+static const int _noise_part_8[3]={
+  8,8,8,
 };

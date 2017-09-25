@@ -46,5 +46,16 @@ static const noise3 _psy_noisebias_11[3]={
     {-30,-30,-30,-30,-26,-26,-26,-26,-26,-26,-26,-26,-26,-24, 99, 99, 99}}},
 };
 
-static const double _noise_thresh_11[3]={ .3,.5,.5 };
+/* tone master attenuation by base quality mode and bitrate tweak */
+static const att3 _psy_tone_masteratt_11[4]={
+  {{ 31,  25,  13},  0,   0},  /* -2 */
+  {{ 30,  25,  12},  0,   0},  /* -1 */
+  {{ 30,  25,  12},  0,   0},  /*  0 */
+  {{ 20,   0, -14},  0,   0},  /* 10 */
+};
 
+/* lowpass by mode **************/
+static const double _psy_lowpass_11[4]={4.,4.5,5.5,30.,};
+
+/* noise normalization **********/
+static const double _noise_thresh_11[3]={ .3,.3,.5 };
